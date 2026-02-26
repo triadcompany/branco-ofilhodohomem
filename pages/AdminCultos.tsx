@@ -1,0 +1,457 @@
+import { useState } from "react";
+import { parseLocalDate } from "@/lib/dateUtils";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { toast } from "sonner";
+import { Plus, Pencil, Trash2, Video } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import RichTextEditor from "@/components/admin/RichTextEditor";
+
+// Extrai o ID do vídeo de uma URL do YouTube
+const extractYouTubeId = (url: string): string => {
+  if (!url) return "";
+  
+  // Se já for apenas o ID (11 caracteres alfanuméricos)
+  if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
+    return url;
+  }
+  
+  // Padrões de URL do YouTube
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]{11})/,
+  ];
+  
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  
+  return url; // Retorna o valor original se não encontrar padrão
+};
+
+// Gera a URL da thumbnail do YouTube baseado no ID do vídeo
+const getYouTubeThumbnail = (videoId: string): string => {
+  if (!videoId) return "";
+  return `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+};
+
+interface Culto {
+  id: string;
+  title: string;
+  date: string;
+  description: string | null;
+  summary: string | null;
+  video_id: string | null;
+  thumbnail_url: string | null;
+  teachings: string[] | null;
+  published: boolean | null;
+  preacher: string | null;
+}
+
+const PREACHERS = [
+  "Pr. Rafael Delmonego",
+  "Ir. Renne Costa",
+  "Ir. Rosimar Fiamoncini",
+  "Ir. Juliano da Rocha",
+  "Ir. Joglair Gregolin",
+];
+
+const AdminCultos = () => {
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingCulto, setEditingCulto] = useState<Culto | null>(null);
+  const [formData, setFormData] = useState({
+    title: "",
+    date: "",
+    description: "",
+    summary: "",
+    video_id: "",
+    thumbnail_url: "",
+    teachings: "",
+    preacher: "Pr. Rafael Delmonego",
+    published: true,
+  });
+
+  const queryClient = useQueryClient();
+
+  const { data: cultos, isLoading } = useQuery({
+    queryKey: ["admin-cultos"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cultos")
+        .select("*")
+        .order("date", { ascending: false });
+      if (error) throw error;
+      return data as Culto[];
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: Omit<Culto, "id">) => {
+      const { error } = await supabase.from("cultos").insert([data]);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-cultos"] });
+      toast.success("Culto criado com sucesso!");
+      setIsDialogOpen(false);
+      resetForm();
+    },
+    onError: (error) => {
+      toast.error("Erro ao criar culto: " + error.message);
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, ...data }: Partial<Culto> & { id: string }) => {
+      const { error } = await supabase.from("cultos").update(data).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-cultos"] });
+      toast.success("Culto atualizado com sucesso!");
+      setIsDialogOpen(false);
+      resetForm();
+    },
+    onError: (error) => {
+      toast.error("Erro ao atualizar culto: " + error.message);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("cultos").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-cultos"] });
+      toast.success("Culto removido com sucesso!");
+    },
+    onError: (error) => {
+      toast.error("Erro ao remover culto: " + error.message);
+    },
+  });
+
+  const resetForm = () => {
+    setFormData({
+      title: "",
+      date: "",
+      description: "",
+      summary: "",
+      video_id: "",
+      thumbnail_url: "",
+      teachings: "",
+      preacher: "Pr. Rafael Delmonego",
+      published: true,
+    });
+    setEditingCulto(null);
+  };
+
+  const handleEdit = (culto: Culto) => {
+    setEditingCulto(culto);
+    // Reconstrói a URL completa do YouTube se houver video_id
+    const videoUrl = culto.video_id 
+      ? `https://www.youtube.com/watch?v=${culto.video_id}` 
+      : "";
+    setFormData({
+      title: culto.title,
+      date: culto.date,
+      description: culto.description || "",
+      summary: culto.summary || "",
+      video_id: videoUrl,
+      thumbnail_url: culto.thumbnail_url || "",
+      teachings: culto.teachings?.[0] || "",
+      preacher: culto.preacher || "",
+      published: culto.published ?? true,
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Extrai o ID do vídeo da URL
+    const videoId = extractYouTubeId(formData.video_id);
+    
+    const data = {
+      title: formData.title,
+      date: formData.date,
+      description: formData.description || null,
+      summary: formData.summary || null,
+      video_id: videoId || null,
+      thumbnail_url: formData.thumbnail_url || null,
+      teachings: formData.teachings ? [formData.teachings] : null,
+      preacher: formData.preacher || null,
+      published: formData.published,
+    };
+
+    if (editingCulto) {
+      updateMutation.mutate({ id: editingCulto.id, ...data });
+    } else {
+      createMutation.mutate(data as Omit<Culto, "id">);
+    }
+  };
+
+  const handleDelete = (id: string) => {
+    if (confirm("Tem certeza que deseja remover este culto?")) {
+      deleteMutation.mutate(id);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="font-display text-3xl font-semibold text-foreground">
+            Cultos
+          </h1>
+          <p className="font-body text-muted-foreground mt-2">
+            Gerencie os cultos do site
+          </p>
+        </div>
+        <Button
+          variant="gold"
+          onClick={() => {
+            resetForm();
+            setIsDialogOpen(true);
+          }}
+          className="gap-2"
+        >
+          <Plus className="w-4 h-4" />
+          Novo Culto
+        </Button>
+      </div>
+
+      {/* List */}
+      {isLoading ? (
+        <div className="text-center py-12">
+          <p className="font-ui text-muted-foreground">Carregando...</p>
+        </div>
+      ) : cultos?.length === 0 ? (
+        <div className="text-center py-12 bg-card rounded-xl border border-border">
+          <Video className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+          <p className="font-body text-muted-foreground">
+            Nenhum culto cadastrado ainda.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {cultos?.map((culto) => (
+            <div
+              key={culto.id}
+              className="bg-card rounded-xl p-6 shadow-card border border-border flex items-center gap-4"
+            >
+              {culto.thumbnail_url && (
+                <img
+                  src={culto.thumbnail_url}
+                  alt={culto.title}
+                  className="w-32 h-20 object-cover rounded-lg"
+                />
+              )}
+              <div className="flex-1">
+                <h3 className="font-display text-lg font-semibold text-foreground">
+                  {culto.title}
+                </h3>
+                <p className="font-ui text-sm text-muted-foreground">
+                  {parseLocalDate(culto.date).toLocaleDateString("pt-BR")}
+                </p>
+                {!culto.published && (
+                  <span className="inline-block mt-1 px-2 py-0.5 bg-muted text-muted-foreground text-xs font-ui rounded">
+                    Rascunho
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => handleEdit(culto)}
+                >
+                  <Pencil className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => handleDelete(culto.id)}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader className="relative z-10 pb-4 border-b border-border mb-4">
+            <DialogTitle className="font-display text-xl">
+              {editingCulto ? "Editar Culto" : "Novo Culto"}
+            </DialogTitle>
+            <DialogDescription>
+              Preencha os dados para {editingCulto ? "atualizar o" : "adicionar um novo"} culto.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="title">Título *</Label>
+                <Input
+                  id="title"
+                  value={formData.title}
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="date">Data *</Label>
+                <Input
+                  id="date"
+                  type="date"
+                  value={formData.date}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="preacher">Pregador</Label>
+              <select
+                id="preacher"
+                value={formData.preacher}
+                onChange={(e) => setFormData({ ...formData, preacher: e.target.value })}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                {PREACHERS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="video_id">Link do Vídeo (YouTube)</Label>
+                <Input
+                  id="video_id"
+                  value={formData.video_id}
+                  onChange={(e) => {
+                    const videoUrl = e.target.value;
+                    const videoId = extractYouTubeId(videoUrl);
+                    const thumbnail = videoId ? getYouTubeThumbnail(videoId) : "";
+                    setFormData({ 
+                      ...formData, 
+                      video_id: videoUrl,
+                      // Só preenche a thumbnail automaticamente se estiver vazia
+                      thumbnail_url: formData.thumbnail_url || thumbnail
+                    });
+                  }}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="thumbnail_url">URL da Thumbnail (auto-preenchida)</Label>
+                <Input
+                  id="thumbnail_url"
+                  value={formData.thumbnail_url}
+                  onChange={(e) => setFormData({ ...formData, thumbnail_url: e.target.value })}
+                  placeholder="https://..."
+                />
+              </div>
+            </div>
+
+            {/* Thumbnail Preview */}
+            {formData.thumbnail_url && (
+              <div className="space-y-2">
+                <Label>Preview da Thumbnail</Label>
+                <div className="relative w-full max-w-md aspect-video rounded-lg overflow-hidden border border-border bg-muted">
+                  <img
+                    src={formData.thumbnail_url}
+                    alt="Preview da thumbnail"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'none';
+                    }}
+                    onLoad={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'block';
+                    }}
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center bg-muted/50 pointer-events-none opacity-0 hover:opacity-100 transition-opacity">
+                    <Video className="w-12 h-12 text-muted-foreground" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Descrição</Label>
+              <RichTextEditor
+                value={formData.description}
+                onChange={(value) => setFormData({ ...formData, description: value })}
+                placeholder="Descrição do culto..."
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Resumo do Culto</Label>
+              <RichTextEditor
+                value={formData.summary}
+                onChange={(value) => setFormData({ ...formData, summary: value })}
+                placeholder="Resumo do culto..."
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Principais Ensinamentos</Label>
+              <RichTextEditor
+                value={formData.teachings}
+                onChange={(value) => setFormData({ ...formData, teachings: value })}
+                placeholder="Use a lista numerada para adicionar os principais ensinamentos..."
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch
+                id="published"
+                checked={formData.published}
+                onCheckedChange={(checked) => setFormData({ ...formData, published: checked })}
+              />
+              <Label htmlFor="published">Publicado</Label>
+            </div>
+
+            <div className="flex gap-4 justify-end">
+              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Cancelar
+              </Button>
+              <Button 
+                type="submit" 
+                variant="gold"
+                disabled={createMutation.isPending || updateMutation.isPending}
+              >
+                {createMutation.isPending || updateMutation.isPending 
+                  ? "Salvando..." 
+                  : editingCulto ? "Salvar" : "Criar"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
+export default AdminCultos;
